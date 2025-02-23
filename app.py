@@ -18,46 +18,56 @@ pair = st.sidebar.selectbox("Select Forex Pair", forex_pairs, index=0)
 @st.cache_data
 def fetch_forex_data(pair):
     df = yf.download(pair, period="30d", interval="1h")
+    
+    # If data is empty, return an empty DataFrame
+    if df.empty:
+        return df
+    
     df["SMA_50"] = ta.trend.sma_indicator(df["Close"], window=50)
     df["SMA_200"] = ta.trend.sma_indicator(df["Close"], window=200)
     df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
+    
     return df
 
 # 📌 Load Data
 df = fetch_forex_data(pair)
 
-# 📌 Fix the Shape Error
-df["SMA_50"] = df["SMA_50"].values.ravel()
-df["SMA_200"] = df["SMA_200"].values.ravel()
-df["RSI"] = df["RSI"].values.ravel()
+# 📌 Check if Market is Closed
+if df.empty:
+    st.warning("⚠️ No data available. The forex market might be closed. Try again during trading hours.")
+else:
+    # Fix shape issue
+    df["SMA_50"] = df["SMA_50"].values.ravel()
+    df["SMA_200"] = df["SMA_200"].values.ravel()
+    df["RSI"] = df["RSI"].values.ravel()
 
-# 📊 Price Chart
-st.subheader(f"📈 {pair} Price Chart")
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name="Close Price"))
-fig.add_trace(go.Scatter(x=df.index, y=df["SMA_50"], mode="lines", name="SMA 50", line=dict(dash="dot")))
-fig.add_trace(go.Scatter(x=df.index, y=df["SMA_200"], mode="lines", name="SMA 200", line=dict(dash="dot")))
-st.plotly_chart(fig, use_container_width=True)
+    # 📊 Price Chart
+    st.subheader(f"📈 {pair} Price Chart")
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name="Close Price"))
+    fig.add_trace(go.Scatter(x=df.index, y=df["SMA_50"], mode="lines", name="SMA 50", line=dict(dash="dot")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["SMA_200"], mode="lines", name="SMA 200", line=dict(dash="dot")))
+    st.plotly_chart(fig, use_container_width=True)
 
-# 📊 RSI Chart
-st.subheader(f"📊 RSI Indicator")
-rsi_fig = go.Figure()
-rsi_fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI"))
-rsi_fig.add_hline(y=70, line=dict(color="red", dash="dash"))
-rsi_fig.add_hline(y=30, line=dict(color="green", dash="dash"))
-st.plotly_chart(rsi_fig, use_container_width=True)
+    # 📊 RSI Chart
+    st.subheader(f"📊 RSI Indicator")
+    rsi_fig = go.Figure()
+    rsi_fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI"))
+    rsi_fig.add_hline(y=70, line=dict(color="red", dash="dash"))
+    rsi_fig.add_hline(y=30, line=dict(color="green", dash="dash"))
+    st.plotly_chart(rsi_fig, use_container_width=True)
 
 # 🔔 Forex Trading Sessions Notification
 def get_current_session():
     now = datetime.datetime.utcnow().time()  # Get UTC time
     if datetime.time(7, 0) <= now <= datetime.time(16, 0):  # London Session (7AM - 4PM UTC)
-        return "🕰️ London Session"
+        return "🕰️ London Session (High Volatility)"
     elif datetime.time(13, 0) <= now <= datetime.time(22, 0):  # New York Session (1PM - 10PM UTC)
-        return "🕰️ New York Session"
+        return "🕰️ New York Session (High Volatility)"
     elif datetime.time(0, 0) <= now <= datetime.time(9, 0):  # Tokyo Session (12AM - 9AM UTC)
-        return "🕰️ Tokyo Session"
+        return "🕰️ Tokyo Session (Moderate Volatility)"
     elif datetime.time(22, 0) <= now <= datetime.time(7, 0):  # Sydney Session (10PM - 7AM UTC)
-        return "🕰️ Sydney Session"
+        return "🕰️ Sydney Session (Low Volatility)"
     else:
         return "⚠️ Out of Market Hours"
 
@@ -82,10 +92,15 @@ def suggest_forex_pairs():
     suggestions = []
     for forex in forex_pairs:
         df_temp = fetch_forex_data(forex)
+        
+        if df_temp.empty:
+            continue  # Skip if no data
+        
         if df_temp["RSI"].iloc[-1] < 30:
             suggestions.append(f"📉 **{forex} (Oversold, Potential Buy)**")
         elif df_temp["RSI"].iloc[-1] > 70:
             suggestions.append(f"📈 **{forex} (Overbought, Potential Sell)**")
+    
     return suggestions
 
 suggestions = suggest_forex_pairs()
