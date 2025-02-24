@@ -1,6 +1,5 @@
 streamlit
-yfinance
+MetaTrader5
 pandas
-plotly
-ta
-requests
+numpy
+plyer
