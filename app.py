@@ -1,111 +1,110 @@
 import streamlit as st
-import yfinance as yf
+import MetaTrader5 as mt5
 import pandas as pd
-import plotly.graph_objects as go
-import ta
-import datetime
+import numpy as np
+import time
+from plyer import notification
 
-# 📌 Streamlit Page Config
-st.set_page_config(page_title="Forex Dashboard", layout="wide")
+# Initialize MT5
+if not mt5.initialize():
+    st.error("❌ MT5 initialization failed")
+    quit()
 
-# 📌 Forex Pairs List
-forex_pairs = ["EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCAD=X"]
+st.title("📊 Forex Trading Live Dashboard")
 
-# 📌 Sidebar - Pair Selector
-pair = st.sidebar.selectbox("Select Forex Pair", forex_pairs, index=0)
+# Forex pairs (Majors + Minors)
+currency_pairs = [
+    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+    "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURNZD", "EURCAD",
+    "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+    "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
+    "CADJPY", "CADCHF", "CHFJPY", "NZDJPY", "NZDCHF"
+]
 
-# 📌 Function to Fetch Forex Data
-@st.cache_data
-def fetch_forex_data(pair):
-    df = yf.download(pair, period="30d", interval="1h")
+# Timeframes
+timeframes = {
+    "M5": mt5.TIMEFRAME_M5,
+    "M15": mt5.TIMEFRAME_M15,
+    "H1": mt5.TIMEFRAME_H1,
+    "H4": mt5.TIMEFRAME_H4
+}
+
+bars = 100  
+
+# Function to calculate RSI
+def calculate_rsi(data, period=14):
+    delta = data['close'].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).rolling(window=period).mean()
+    avg_loss = pd.Series(loss).rolling(window=period).mean()
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+# Function to calculate MACD
+def calculate_macd(data, short_period=12, long_period=26, signal_period=9):
+    short_ema = data['close'].ewm(span=short_period, adjust=False).mean()
+    long_ema = data['close'].ewm(span=long_period, adjust=False).mean()
+    macd_line = short_ema - long_ema
+    return macd_line, macd_line.ewm(span=signal_period, adjust=False).mean()
+
+# Function to generate buy/sell signals
+def generate_trade_signal(data, pair, timeframe):
+    if data is None or data.empty:
+        return "NO DATA"
+
+    rsi = data["RSI_14"].iloc[-1]
+    macd = data["MACD"].iloc[-1]
+    signal = data["Signal"].iloc[-1]
+    close_price = data["close"].iloc[-1]
+
+    if rsi < 30 and macd > signal:
+        alert_message = f"📢 BUY SIGNAL: {pair} ({timeframe}) at {close_price}"
+        notification.notify(title="📢 Forex Trading Signal", message=alert_message, timeout=10)
+        return "BUY 📈"
+
+    elif rsi > 70 and macd < signal:
+        return "SELL 📉"
+
+    return "HOLD ⏸️"
+
+# Function to fetch live data
+def fetch_live_data(symbol, timeframe_name, timeframe_value):
+    rates = mt5.copy_rates_from_pos(symbol, timeframe_value, 0, bars)
     
-    # If data is empty, return an empty DataFrame
-    if df.empty:
-        return df
-    
-    df["SMA_50"] = ta.trend.sma_indicator(df["Close"], window=50)
-    df["SMA_200"] = ta.trend.sma_indicator(df["Close"], window=200)
-    df["RSI"] = ta.momentum.rsi(df["Close"], window=14)
-    
+    if rates is None or len(rates) == 0:
+        return None
+
+    df = pd.DataFrame(rates)
+    df["time"] = pd.to_datetime(df["time"], unit="s")
+
+    # Compute technical indicators
+    df["RSI_14"] = calculate_rsi(df)
+    df["MACD"], df["Signal"] = calculate_macd(df)
+
     return df
 
-# 📌 Load Data
-df = fetch_forex_data(pair)
+# Live Streamlit Dashboard
+st.sidebar.header("Settings")
+selected_pairs = st.sidebar.multiselect("Select Currency Pairs", currency_pairs, default=["EURUSD", "GBPUSD"])
+selected_timeframe = st.sidebar.selectbox("Select Timeframe", list(timeframes.keys()))
 
-# 📌 Check if Market is Closed
-if df.empty:
-    st.warning("⚠️ No data available. The forex market might be closed. Try again during trading hours.")
-else:
-    # Fix shape issue
-    df["SMA_50"] = df["SMA_50"].values.ravel()
-    df["SMA_200"] = df["SMA_200"].values.ravel()
-    df["RSI"] = df["RSI"].values.ravel()
+if st.sidebar.button("Start Trading"):
+    st.sidebar.success("📡 Streaming Live Data...")
 
-    # 📊 Price Chart
-    st.subheader(f"📈 {pair} Price Chart")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines", name="Close Price"))
-    fig.add_trace(go.Scatter(x=df.index, y=df["SMA_50"], mode="lines", name="SMA 50", line=dict(dash="dot")))
-    fig.add_trace(go.Scatter(x=df.index, y=df["SMA_200"], mode="lines", name="SMA 200", line=dict(dash="dot")))
-    st.plotly_chart(fig, use_container_width=True)
+    placeholder = st.empty()
 
-    # 📊 RSI Chart
-    st.subheader(f"📊 RSI Indicator")
-    rsi_fig = go.Figure()
-    rsi_fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], mode="lines", name="RSI"))
-    rsi_fig.add_hline(y=70, line=dict(color="red", dash="dash"))
-    rsi_fig.add_hline(y=30, line=dict(color="green", dash="dash"))
-    st.plotly_chart(rsi_fig, use_container_width=True)
-
-# 🔔 Forex Trading Sessions Notification
-def get_current_session():
-    now = datetime.datetime.utcnow().time()  # Get UTC time
-    if datetime.time(7, 0) <= now <= datetime.time(16, 0):  # London Session (7AM - 4PM UTC)
-        return "🕰️ London Session (High Volatility)"
-    elif datetime.time(13, 0) <= now <= datetime.time(22, 0):  # New York Session (1PM - 10PM UTC)
-        return "🕰️ New York Session (High Volatility)"
-    elif datetime.time(0, 0) <= now <= datetime.time(9, 0):  # Tokyo Session (12AM - 9AM UTC)
-        return "🕰️ Tokyo Session (Moderate Volatility)"
-    elif datetime.time(22, 0) <= now <= datetime.time(7, 0):  # Sydney Session (10PM - 7AM UTC)
-        return "🕰️ Sydney Session (Low Volatility)"
-    else:
-        return "⚠️ Out of Market Hours"
-
-session_status = get_current_session()
-st.sidebar.info(session_status)
-
-# 📏 Lot Size Calculator
-st.subheader("💰 Lot Size Calculator")
-balance = st.number_input("Account Balance ($)", value=1000)
-risk_percent = st.number_input("Risk Percentage (%)", value=2)
-stop_loss_pips = st.number_input("Stop Loss (Pips)", value=30)
-
-if st.button("Calculate Lot Size"):
-    risk_amount = (risk_percent / 100) * balance
-    lot_size = risk_amount / (stop_loss_pips * 10)  # Assuming pip value = $10
-    st.success(f"📏 Recommended Lot Size: {round(lot_size, 2)}")
-
-# 💡 Suggested Forex Pairs Based on Technical Indicators
-st.subheader("📌 Suggested Trading Pairs")
-
-def suggest_forex_pairs():
-    suggestions = []
-    for forex in forex_pairs:
-        df_temp = fetch_forex_data(forex)
+    while True:
+        table_data = []
         
-        if df_temp.empty:
-            continue  # Skip if no data
-        
-        if df_temp["RSI"].iloc[-1] < 30:
-            suggestions.append(f"📉 **{forex} (Oversold, Potential Buy)**")
-        elif df_temp["RSI"].iloc[-1] > 70:
-            suggestions.append(f"📈 **{forex} (Overbought, Potential Sell)**")
-    
-    return suggestions
+        for pair in selected_pairs:
+            df = fetch_live_data(pair, selected_timeframe, timeframes[selected_timeframe])
+            signal = generate_trade_signal(df, pair, selected_timeframe)
 
-suggestions = suggest_forex_pairs()
-if suggestions:
-    for suggestion in suggestions:
-        st.write(suggestion)
-else:
-    st.write("✅ No strong buy/sell signals at the moment.")
+            last_price = df["close"].iloc[-1] if df is not None and not df.empty else "N/A"
+            table_data.append([pair, selected_timeframe, last_price, signal])
+
+        df_table = pd.DataFrame(table_data, columns=["Pair", "Timeframe", "Price", "Signal"])
+        placeholder.table(df_table)
+
+        time.sleep(5)  # Refresh every 10 seconds
